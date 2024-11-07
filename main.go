@@ -6,16 +6,17 @@ import (
 	"log"
 	"os"
 	"regexp"
+	"strings"
 )
 
 type brunchLog struct {
-	path                                        string
-	tasks                                       []string
-	intersection, leftExclusive, rightExclusive map[string][]string
+	name, path                                                string
+	tasks                                                     []string
+	tasksCommits, intersection, leftExclusive, rightExclusive map[string][]string
 }
 
-func newBrunchLog(path string) brunchLog {
-	return brunchLog{path: path, tasks: []string{}}
+func newBrunchLog(name string) brunchLog {
+	return brunchLog{name: name, path: "src/log-" + name + ".txt"}
 }
 
 func main() {
@@ -23,17 +24,17 @@ func main() {
 }
 
 func start() {
-	logs := []string{"src/log-dev.txt", "src/log-main.txt", "src/log-test.txt"}
+	logs := []string{"dev", "test", "main"}
 	cols := []brunchLog{}
 	for _, v := range logs {
 		l := newBrunchLog(v)
 		l.open()
 		cols = append(cols, l)
 	}
-	lines := comparisonTable(cols)
-	for _, v := range lines {
-		fmt.Println(v)
-	}
+	table := comparisonTable(cols)
+	save("src/comparing-table.csv", table)
+	tableSimple := comparisonTableSimple(cols)
+	save("src/comparing-table-simple.csv", tableSimple)
 }
 
 func (l *brunchLog) open() {
@@ -42,18 +43,23 @@ func (l *brunchLog) open() {
 		log.Fatal(err)
 	}
 	defer file.Close()
+	l.tasksCommits = make(map[string][]string)
 
 	r := bufio.NewReader(file)
-
 	for {
 		line, _, err := r.ReadLine()
 		if len(line) > 0 {
-			l.tasks = append(l.tasks, searchPStasks(string(line))...)
+			str := string(line)
+			tasks := searchPStasks(str)
+			for _, v := range tasks {
+				l.tasksCommits[v] = append(l.tasksCommits[v], str)
+			}
 		}
 		if err != nil {
 			break
 		}
 	}
+	l.tasks = keys(l.tasksCommits)
 }
 
 func (l *brunchLog) compare(a *brunchLog) {
@@ -75,8 +81,7 @@ func (l *brunchLog) compare(a *brunchLog) {
 	a.intersection[l.path] = intersection
 	a.leftExclusive[l.path] = right
 }
-
-func comparisonTable(logs []brunchLog) [][]string {
+func comparisonTableSimple(logs []brunchLog) string {
 	filled := func(n int) []string {
 		s := make([]string, n)
 		for i := range s {
@@ -84,33 +89,82 @@ func comparisonTable(logs []brunchLog) [][]string {
 		}
 		return s
 	}
-
 	colsLen := len(logs)
-	lines := [][]string{filled(colsLen)}
+	cols := filled(colsLen)
+	rows := []string{}
 
 	for lCol, lLog := range logs {
-		lines[0][lCol] = lLog.path
+		cols[lCol] = lLog.path
 		for _, lTask := range lLog.tasks {
-			line := filled(colsLen)
-			line[lCol] = lTask
+			row := filled(colsLen)
+			row[lCol] = lTask
 			for rCol := lCol + 1; rCol < colsLen; rCol++ {
 				rLog := logs[rCol]
 				for ii, rTask := range rLog.tasks {
 					if lTask == rTask {
-						line[rCol] = "+"
+						row[rCol] = "+"
 						logs[rCol].tasks = append(logs[rCol].tasks[:ii], logs[rCol].tasks[ii+1:]...)
 						break
 					}
 
 				}
 			}
-			lines = append(lines, line)
+			rows = append(rows, strings.Join(row, ";"))
 		}
 	}
-	return lines
+	return strings.Join(cols, ";") + "\n" + strings.Join(rows, "\n")
+}
+
+func comparisonTable(logs []brunchLog) string {
+	colsLen := len(logs)
+	cols := make([]string, colsLen)
+	rows := []string{}
+
+	for lCol, lLog := range logs {
+		cols[lCol] = lLog.path
+		for _, lTask := range lLog.tasks {
+			row := make([]string, colsLen)
+			row[lCol] = lTask + "( " + strings.Join(lLog.tasksCommits[lTask], "----> ") + " )"
+			for rCol := lCol + 1; rCol < colsLen; rCol++ {
+				rLog := logs[rCol]
+				for ii, rTask := range rLog.tasks {
+					if lTask == rTask {
+						row[rCol] = strings.Join(logs[rCol].tasksCommits[rTask], "----> ")
+						logs[rCol].tasks = append(logs[rCol].tasks[:ii], logs[rCol].tasks[ii+1:]...)
+						break
+					}
+
+				}
+			}
+			rows = append(rows, strings.Join(row, ";"))
+		}
+	}
+	return strings.Join(cols, ";") + "\n" + strings.Join(rows, "\n")
+}
+
+func save(path, content string) {
+	f, err := os.Create(path)
+	if err != nil {
+		log.Fatal(err)
+	}
+
+	n, err := f.WriteString(content + "\n")
+	if err != nil {
+		log.Fatal(err)
+	}
+	fmt.Printf("wrote %d bytes\n", n)
+	f.Sync()
 }
 
 func searchPStasks(str string) []string {
 	re := regexp.MustCompile(`(?im)(?P<ps>ps-\d+)`)
 	return re.FindAllString(str, -1)
+}
+
+func keys(m map[string][]string) []string {
+	keys := []string{}
+	for key := range m {
+		keys = append(keys, key)
+	}
+	return keys
 }
