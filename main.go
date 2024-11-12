@@ -2,144 +2,114 @@ package main
 
 import (
 	"bufio"
+	"bytes"
+	"encoding/json"
 	"fmt"
+	"io/fs"
 	"log"
 	"os"
+	"path/filepath"
 	"regexp"
 	"strings"
+	"sync"
 )
 
 type brunchLog struct {
-	name, path                                                string
-	tasks                                                     []string
-	tasksCommits, intersection, leftExclusive, rightExclusive map[string][]string
+	name, path string
+	tasks      map[string][]string
 }
 
-func newBrunchLog(name string) brunchLog {
-	return brunchLog{name: name, path: "src/log-" + name + ".txt"}
+func newBrunchLog(name, path string, tasks map[string][]string) brunchLog {
+	return brunchLog{name: name, path: path, tasks: tasks}
+}
+
+type config struct {
+	Logs      string
+	Output    string
+	QueueKeys []string
+}
+
+func init() {
+	log.SetOutput(os.Stdout)
+	log.SetFlags(log.Lshortfile)
 }
 
 func main() {
-	start()
-}
+	confPath := "src/settings.json" //configPath()
+	conf := getSettings(confPath)
+	brunchLogs, tasks := getBrunchLogs(conf)
+	brunchLogsLen := len(brunchLogs)
 
-func start() {
-	logs := []string{"dev", "test", "main"}
-	cols := []brunchLog{}
-	for _, v := range logs {
-		l := newBrunchLog(v)
-		l.open()
-		cols = append(cols, l)
+	var csv string
+	csv += ";"
+	for i := 0; i < brunchLogsLen; i++ {
+		csv += brunchLogs[i].name + ";"
 	}
-	table := comparisonTable(cols)
-	save("src/comparing-table.csv", table)
-	tableSimple := comparisonTableSimple(cols)
-	save("src/comparing-table-simple.csv", tableSimple)
+	csv += "\n"
+	for task := range tasks {
+		csv += task + ";"
+		for i := 0; i < brunchLogsLen; i++ {
+			if _, ok := brunchLogs[i].tasks[task]; ok {
+				csv += "X;"
+			} else {
+				csv += ";"
+			}
+		}
+		csv += "\n"
+	}
+	save(conf.Output+"/comparing-table-simple.csv", csv)
 }
 
-func (l *brunchLog) open() {
-	file, err := os.Open(l.path)
+func getBrunchLogs(conf config) (brunchLogs []brunchLog, tasks map[string]bool) {
+	logs := getLogs(conf.Logs)
+	re := searchTasksRe(conf)
+	var wg sync.WaitGroup
+
+	tasks = make(map[string]bool)
+	search := func(brunch brunchLog) func(str string) {
+		return func(str string) {
+			res := re.FindAllString(str, -1)
+			for _, v := range res {
+				if _, ok := tasks[v]; !ok {
+					tasks[v] = true
+				}
+				brunch.tasks[v] = append(brunch.tasks[v], str)
+			}
+		}
+	}
+	brunchLogs = make([]brunchLog, len(logs))
+	for i, v := range logs {
+		wg.Add(1)
+		b := newBrunchLog(v.name, v.path, make(map[string][]string))
+		brunchLogs[i] = b
+		go getTasks(v.path, search(b), &wg)
+	}
+
+	wg.Wait()
+
+	return brunchLogs, tasks
+}
+
+func getTasks(path string, fn func(str string), wg *sync.WaitGroup) {
+	file, err := os.Open(path)
 	if err != nil {
 		log.Fatal(err)
 	}
-	defer file.Close()
-	l.tasksCommits = make(map[string][]string)
+	defer func() {
+		file.Close()
+		wg.Done()
+	}()
 
 	r := bufio.NewReader(file)
 	for {
 		line, _, err := r.ReadLine()
 		if len(line) > 0 {
-			str := string(line)
-			tasks := searchPStasks(str)
-			for _, v := range tasks {
-				l.tasksCommits[v] = append(l.tasksCommits[v], str)
-			}
+			fn(string(line))
 		}
 		if err != nil {
 			break
 		}
 	}
-	l.tasks = keys(l.tasksCommits)
-}
-
-func (l *brunchLog) compare(a *brunchLog) {
-	left := l.tasks
-	right := a.tasks
-	intersection := []string{}
-	for i, l := range left {
-		for ii, r := range right {
-			if l == r {
-				intersection = append(intersection, r)
-				left = append(left[:i], left[i+1:]...)
-				right = append(right[:ii], right[ii+1:]...)
-			}
-		}
-	}
-	l.intersection[a.path] = intersection
-	l.leftExclusive[a.path] = left
-
-	a.intersection[l.path] = intersection
-	a.leftExclusive[l.path] = right
-}
-func comparisonTableSimple(logs []brunchLog) string {
-	filled := func(n int) []string {
-		s := make([]string, n)
-		for i := range s {
-			s[i] = "-"
-		}
-		return s
-	}
-	colsLen := len(logs)
-	cols := filled(colsLen)
-	rows := []string{}
-
-	for lCol, lLog := range logs {
-		cols[lCol] = lLog.path
-		for _, lTask := range lLog.tasks {
-			row := filled(colsLen)
-			row[lCol] = lTask
-			for rCol := lCol + 1; rCol < colsLen; rCol++ {
-				rLog := logs[rCol]
-				for ii, rTask := range rLog.tasks {
-					if lTask == rTask {
-						row[rCol] = "+"
-						logs[rCol].tasks = append(logs[rCol].tasks[:ii], logs[rCol].tasks[ii+1:]...)
-						break
-					}
-
-				}
-			}
-			rows = append(rows, strings.Join(row, ";"))
-		}
-	}
-	return strings.Join(cols, ";") + "\n" + strings.Join(rows, "\n")
-}
-
-func comparisonTable(logs []brunchLog) string {
-	colsLen := len(logs)
-	cols := make([]string, colsLen)
-	rows := []string{}
-
-	for lCol, lLog := range logs {
-		cols[lCol] = lLog.path
-		for _, lTask := range lLog.tasks {
-			row := make([]string, colsLen)
-			row[lCol] = lTask + "( " + strings.Join(lLog.tasksCommits[lTask], "----> ") + " )"
-			for rCol := lCol + 1; rCol < colsLen; rCol++ {
-				rLog := logs[rCol]
-				for ii, rTask := range rLog.tasks {
-					if lTask == rTask {
-						row[rCol] = strings.Join(logs[rCol].tasksCommits[rTask], "----> ")
-						logs[rCol].tasks = append(logs[rCol].tasks[:ii], logs[rCol].tasks[ii+1:]...)
-						break
-					}
-
-				}
-			}
-			rows = append(rows, strings.Join(row, ";"))
-		}
-	}
-	return strings.Join(cols, ";") + "\n" + strings.Join(rows, "\n")
 }
 
 func save(path, content string) {
@@ -156,15 +126,56 @@ func save(path, content string) {
 	f.Sync()
 }
 
-func searchPStasks(str string) []string {
-	re := regexp.MustCompile(`(?im)(?P<ps>ps-\d+)`)
-	return re.FindAllString(str, -1)
+func searchTasksRe(conf config) *regexp.Regexp {
+	str := `(?im)`
+	groups := []string{}
+	for _, key := range conf.QueueKeys {
+		groups = append(groups, `(?P<`+key+`>`+strings.ToLower(key)+`-\d+)`)
+	}
+	return regexp.MustCompile(str + strings.Join(groups, "|"))
 }
 
-func keys(m map[string][]string) []string {
-	keys := []string{}
-	for key := range m {
-		keys = append(keys, key)
+func configPath() string {
+	fmt.Println("Путь до файла с конфигами, например: src/settings.json")
+	fmt.Print("\n")
+	fmt.Print("Вводи: ")
+	var input string
+	_, err := fmt.Scanln(&input)
+	if err != nil {
+		fmt.Fprintln(os.Stderr, err)
+		log.Fatal(err)
 	}
-	return keys
+	return input
+}
+func getSettings(path string) config {
+	b, err := os.ReadFile(path)
+	if err != nil {
+		log.Fatalf("Failed to read file: %v\n", err)
+	}
+	var u config
+	json.NewDecoder(bytes.NewBuffer(b)).Decode(&u)
+	return u
+}
+
+// Ищем файлы с префиксом log- и расширением .txt
+func getLogs(dir string) []struct{ name, path string } {
+	logs := []struct{ name, path string }{}
+	fmt.Println(dir)
+	err := filepath.WalkDir(dir, func(path string, d fs.DirEntry, err error) error {
+		if d.IsDir() {
+			return nil
+		}
+		name := d.Name()
+		if strings.HasPrefix(name, "log-") && strings.HasSuffix(path, ".txt") {
+			logs = append(logs, struct{ name, path string }{name: name, path: path})
+			return nil
+		} else {
+			fmt.Println(path)
+		}
+		return nil
+	})
+	if err != nil {
+		log.Fatal(err)
+	}
+	return logs
 }
