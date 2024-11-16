@@ -2,54 +2,61 @@ package main
 
 import (
 	"bufio"
-	"bytes"
-	"encoding/json"
+	"errors"
 	"fmt"
 	"io/fs"
 	"log"
 	"os"
 	"path/filepath"
 	"regexp"
+	"runtime"
 	"strings"
 	"sync"
 )
 
-type brunchLog struct {
+type branchLog struct {
 	name, path string
 	tasks      map[string][]string
 }
 
-func newBrunchLog(name, path string, tasks map[string][]string) brunchLog {
-	return brunchLog{name: name, path: path, tasks: tasks}
+func newBranchLog(name, path string, tasks map[string][]string) branchLog {
+	return branchLog{name: name, path: path, tasks: tasks}
 }
 
-type config struct {
-	Logs      string
-	Output    string
-	QueueKeys []string
-}
+var (
+	_, b, _, _ = runtime.Caller(0)
+	basepath   = filepath.Dir(b)
+)
 
 func init() {
-	log.SetOutput(os.Stdout)
-	log.SetFlags(log.Lshortfile)
+	setLogger()
+	logger.Info("Погнали!")
+}
+func main() {
+	confPath := "src/config.json"
+	if _, err := os.Stat(confPath); errors.Is(err, os.ErrNotExist) {
+		confPath = configPath()
+	}
+	conf := getSettings(confPath)
+	if conf.Auto {
+		conf.Cmd.save(conf.Src)
+	}
+	branchLogs, tasks := getBranchLogs(conf)
+	save(conf.Output+"/comparing-table-simple.csv", toCSVstr(branchLogs, tasks))
 }
 
-func main() {
-	confPath := "src/settings.json" //configPath()
-	conf := getSettings(confPath)
-	brunchLogs, tasks := getBrunchLogs(conf)
-	brunchLogsLen := len(brunchLogs)
-
+func toCSVstr(branchLogs []branchLog, tasks map[string]bool) string {
+	branchLogsLen := len(branchLogs)
 	var csv string
 	csv += ";"
-	for i := 0; i < brunchLogsLen; i++ {
-		csv += brunchLogs[i].name + ";"
+	for i := 0; i < branchLogsLen; i++ {
+		csv += branchLogs[i].name + ";"
 	}
 	csv += "\n"
 	for task := range tasks {
 		csv += task + ";"
-		for i := 0; i < brunchLogsLen; i++ {
-			if _, ok := brunchLogs[i].tasks[task]; ok {
+		for i := 0; i < branchLogsLen; i++ {
+			if _, ok := branchLogs[i].tasks[task]; ok {
 				csv += "X;"
 			} else {
 				csv += ";"
@@ -57,37 +64,43 @@ func main() {
 		}
 		csv += "\n"
 	}
-	save(conf.Output+"/comparing-table-simple.csv", csv)
+	return csv
 }
 
-func getBrunchLogs(conf config) (brunchLogs []brunchLog, tasks map[string]bool) {
-	logs := getLogs(conf.Logs)
+func getBranchLogs(conf config) (branchLogs []branchLog, tasks map[string]bool) {
+	logs := getLogs(conf.Src)
 	re := searchTasksRe(conf)
 	var wg sync.WaitGroup
 
 	tasks = make(map[string]bool)
-	search := func(brunch brunchLog) func(str string) {
+	tasksMx := sync.RWMutex{}
+	search := func(branch branchLog) func(str string) {
 		return func(str string) {
 			res := re.FindAllString(str, -1)
 			for _, v := range res {
-				if _, ok := tasks[v]; !ok {
+				tasksMx.RLock()
+				_, ok := tasks[v]
+				tasksMx.RUnlock()
+				if !ok {
+					tasksMx.Lock()
 					tasks[v] = true
+					tasksMx.Unlock()
 				}
-				brunch.tasks[v] = append(brunch.tasks[v], str)
+				branch.tasks[v] = append(branch.tasks[v], str)
 			}
 		}
 	}
-	brunchLogs = make([]brunchLog, len(logs))
+	branchLogs = make([]branchLog, len(logs))
 	for i, v := range logs {
 		wg.Add(1)
-		b := newBrunchLog(v.name, v.path, make(map[string][]string))
-		brunchLogs[i] = b
+		b := newBranchLog(v.name, v.path, make(map[string][]string))
+		branchLogs[i] = b
 		go getTasks(v.path, search(b), &wg)
 	}
 
 	wg.Wait()
 
-	return brunchLogs, tasks
+	return branchLogs, tasks
 }
 
 func getTasks(path string, fn func(str string), wg *sync.WaitGroup) {
@@ -133,28 +146,6 @@ func searchTasksRe(conf config) *regexp.Regexp {
 		groups = append(groups, `(?P<`+key+`>`+strings.ToLower(key)+`-\d+)`)
 	}
 	return regexp.MustCompile(str + strings.Join(groups, "|"))
-}
-
-func configPath() string {
-	fmt.Println("Путь до файла с конфигами, например: src/settings.json")
-	fmt.Print("\n")
-	fmt.Print("Вводи: ")
-	var input string
-	_, err := fmt.Scanln(&input)
-	if err != nil {
-		fmt.Fprintln(os.Stderr, err)
-		log.Fatal(err)
-	}
-	return input
-}
-func getSettings(path string) config {
-	b, err := os.ReadFile(path)
-	if err != nil {
-		log.Fatalf("Failed to read file: %v\n", err)
-	}
-	var u config
-	json.NewDecoder(bytes.NewBuffer(b)).Decode(&u)
-	return u
 }
 
 // Ищем файлы с префиксом log- и расширением .txt

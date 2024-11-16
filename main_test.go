@@ -1,6 +1,9 @@
 package main
 
 import (
+	"io/ioutil"
+	"os"
+	"path/filepath"
 	"reflect"
 	"testing"
 )
@@ -50,6 +53,74 @@ func TestSearchTasksRe(t *testing.T) {
 			got := re.FindAllString(tt.str, -1)
 			if !reflect.DeepEqual(got, tt.want) {
 				t.Errorf("searchTasksRe() = %v, want %v", got, tt.want)
+			}
+		})
+	}
+}
+
+func TestGetLogs(t *testing.T) {
+	testCases := []struct {
+		name     string
+		logFiles []string
+		expected map[string]bool
+	}{
+		{
+			name:     "Three log files",
+			logFiles: []string{"log-1.txt", "log-2.txt", "log-3.txt"},
+			expected: map[string]bool{
+				"log-1.txt": false,
+				"log-2.txt": false,
+				"log-3.txt": false,
+			},
+		},
+		{
+			name:     "No log files",
+			logFiles: []string{},
+			expected: map[string]bool{},
+		},
+		{
+			name:     "Mixed files",
+			logFiles: []string{"log-1.txt", "log-2.txt", "otherfile.txt"},
+			expected: map[string]bool{
+				"log-1.txt": false,
+				"log-2.txt": false,
+			},
+		},
+	}
+
+	for _, tc := range testCases {
+		t.Run(tc.name, func(t *testing.T) {
+			// Create a temporary directory
+			tempDir, err := ioutil.TempDir("", "testlogs")
+			if err != nil {
+				t.Fatal(err)
+			}
+			defer os.RemoveAll(tempDir)
+
+			// Create test log files
+			for _, fileName := range tc.logFiles {
+				filePath := filepath.Join(tempDir, fileName)
+				if err := ioutil.WriteFile(filePath, []byte("test content"), 0644); err != nil {
+					t.Fatal(err)
+				}
+			}
+
+			// Call getLogs function
+			logs := getLogs(tempDir)
+
+			// Verify the returned logs
+			for _, log := range logs {
+				if _, ok := tc.expected[log.name]; ok {
+					tc.expected[log.name] = true
+				} else {
+					t.Errorf("Unexpected log file: %s", log.name)
+				}
+			}
+
+			for fileName, found := range tc.expected {
+				if !found {
+					t.Errorf("Expected log file not found: %s", fileName)
+				}
 			}
 		})
 	}
