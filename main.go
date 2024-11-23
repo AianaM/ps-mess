@@ -7,20 +7,23 @@ import (
 	"log"
 	"os"
 	"path/filepath"
-	"runtime"
 	"strings"
 )
 
 var (
-	_, b, _, _ = runtime.Caller(0)
-	basepath   = filepath.Dir(b)
-	outputDir  = basepath + "/ps-mess"
-	confFile   = "config.json"
-	logFile    = "log.json"
-	tableFile  = "table.csv"
+	outputDir = "ps-mess"
+	confFile  = "config.json"
+	logFile   = "log.json"
+	tableFile = "table.csv"
 )
 
 func init() {
+	if dir, err := os.Getwd(); err != nil {
+		log.Fatal(err)
+	} else {
+		log.Println("location: ", dir)
+		outputDir = dir + "/" + outputDir
+	}
 	log.SetFlags(log.LstdFlags | log.Lshortfile)
 }
 func main() {
