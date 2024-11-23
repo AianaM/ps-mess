@@ -11,18 +11,27 @@ import (
 )
 
 var (
-	outputDir = "ps-mess"
-	confFile  = "config.json"
-	logFile   = "log.json"
-	tableFile = "table.csv"
+	outputDir  = "ps-mess"
+	confFile   = "config.json"
+	gitLogFile = "log.json"
+	tableFile  = "table.csv"
 )
 
 func init() {
+	fmt.Println("Погнали!")
+	if err := os.MkdirAll(outputDir, os.ModePerm); err != nil {
+		log.Fatal(err)
+	}
 	if dir, err := os.Getwd(); err != nil {
 		log.Fatal(err)
 	} else {
 		log.Println("location: ", dir)
 		outputDir = dir + "/" + outputDir
+	}
+	if logFile, err := os.Create(outputDir + "/ps-mess.log"); err != nil {
+		log.Fatalln(err)
+	} else {
+		log.SetOutput(logFile)
 	}
 	log.SetFlags(log.LstdFlags | log.Lshortfile)
 }
@@ -66,16 +75,13 @@ func run() {
 
 func prep() {
 	confPath := outputDir + "/" + confFile
-	fmt.Println("Погнали! Создаю файл настроек", confPath, "его можно и нужно будет изменить")
+	fmt.Println("Создаю файл настроек", confPath, "его можно и нужно будет изменить")
 	log.Println("prep run", confPath)
-	if err := os.MkdirAll(outputDir, os.ModePerm); err != nil {
-		log.Fatal(err)
-	}
 	if _, err := os.Stat(confPath); errors.Is(err, os.ErrNotExist) {
 		save(confPath, makeFakeConfig())
 	}
 	conf := getSettings(confPath)
-	commands := getLogCommands(conf.Branches, conf.Since, outputDir, logFile)
+	commands := getLogCommands(conf.Branches, conf.Since, outputDir, gitLogFile)
 	fmt.Println("===\n\n", "Эту команду надо ввести в той дирректории где у тебя репа:", "\n", commands, "\n\n===")
 	log.Println("prep done")
 }
