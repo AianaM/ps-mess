@@ -6,37 +6,40 @@ import (
 	"fmt"
 	"log"
 	"os"
+	"strings"
 )
 
 type config struct {
-	// Путь к файлам логов
-	Src string
-	// Выходной каталог.
-	Output string
 	// Ключи очередей в яндекс треккере
 	QueueKeys []string
-	Cmd       gitLog
-	// Надо ли собирать логи (если false, то надо самостоятельно положить логи в папку указанную в src)
-	Auto bool
+	// Ветки, которые нас интересуют
+	Branches []string
+	// За какой период собираем логи
+	Since string
 }
 
-func configPath() string {
-	fmt.Println("Путь до файла с конфигами, например: src/config.json")
-	fmt.Print("\n")
-	fmt.Print("Вводи: ")
-	var input string
-	_, err := fmt.Scanln(&input)
-	if err != nil {
-		fmt.Fprintln(os.Stderr, err)
+func makeFakeConfig() string {
+	log.Println("makeFakeConfig start")
+	consf := config{
+		QueueKeys: []string{"ps", "scp"},
+		Branches:  []string{"dev", "test"},
+		Since:     "3 weeks ago",
+	}
+	b := new(strings.Builder)
+	encoder := json.NewEncoder(b)
+	if err := encoder.Encode(consf); err != nil {
+		fmt.Println("ошибка при создании файла примера конфигов")
 		log.Fatal(err)
 	}
-	return input
+	log.Println("makeFakeConfig done")
+	return b.String()
 }
 
 func getSettings(path string) config {
 	b, err := os.ReadFile(path)
 	if err != nil {
-		log.Fatalf("Failed to read file: %v\n", err)
+		fmt.Println("не могу открыть файл ", path)
+		log.Fatal(err)
 	}
 	var u config
 	json.NewDecoder(bytes.NewBuffer(b)).Decode(&u)

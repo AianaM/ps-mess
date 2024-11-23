@@ -1,11 +1,13 @@
 package main
 
 import (
-	"io/ioutil"
+	"io/fs"
 	"os"
 	"path/filepath"
 	"reflect"
+	"strings"
 	"testing"
+	"testing/fstest"
 )
 
 func TestSearchTasksRe(t *testing.T) {
@@ -49,7 +51,7 @@ func TestSearchTasksRe(t *testing.T) {
 
 	for _, tt := range tests {
 		t.Run(tt.name, func(t *testing.T) {
-			re := searchTasksRe(tt.conf)
+			re := searchTasksRe(tt.conf.QueueKeys)
 			got := re.FindAllString(tt.str, -1)
 			if !reflect.DeepEqual(got, tt.want) {
 				t.Errorf("searchTasksRe() = %v, want %v", got, tt.want)
@@ -58,69 +60,83 @@ func TestSearchTasksRe(t *testing.T) {
 	}
 }
 
-func TestGetLogs(t *testing.T) {
-	testCases := []struct {
-		name     string
-		logFiles []string
-		expected map[string]bool
+func TestGetLogFiles(t *testing.T) {
+	tests := []struct {
+		name    string
+		dir     string
+		files   fstest.MapFS
+		want    []struct{ name, path string }
+		wantErr bool
 	}{
 		{
-			name:     "Three log files",
-			logFiles: []string{"log-1.txt", "log-2.txt", "log-3.txt"},
-			expected: map[string]bool{
-				"log-1.txt": false,
-				"log-2.txt": false,
-				"log-3.txt": false,
+			name: "Single log file",
+			dir:  "testdir",
+			files: fstest.MapFS{
+				"testdir/file1.log.json": &fstest.MapFile{Mode: fs.ModePerm},
 			},
+			want: []struct{ name, path string }{
+				{name: "file1.log.json", path: "testdir/file1.log.json"},
+			},
+			wantErr: false,
 		},
 		{
-			name:     "No log files",
-			logFiles: []string{},
-			expected: map[string]bool{},
+			name: "Multiple log files",
+			dir:  "testdir",
+			files: fstest.MapFS{
+				"testdir/file1.log.json": &fstest.MapFile{Mode: fs.ModePerm},
+				"testdir/file2.log.json": &fstest.MapFile{Mode: fs.ModePerm},
+			},
+			want: []struct{ name, path string }{
+				{name: "file1.log.json", path: "testdir/file1.log.json"},
+				{name: "file2.log.json", path: "testdir/file2.log.json"},
+			},
+			wantErr: false,
 		},
 		{
-			name:     "Mixed files",
-			logFiles: []string{"log-1.txt", "log-2.txt", "otherfile.txt"},
-			expected: map[string]bool{
-				"log-1.txt": false,
-				"log-2.txt": false,
+			name: "No log files",
+			dir:  "testdir",
+			files: fstest.MapFS{
+				"testdir/file1.txt": &fstest.MapFile{Mode: fs.ModePerm},
 			},
+			want:    nil,
+			wantErr: false,
+		},
+		{
+			name: "Mixed files",
+			dir:  "testdir",
+			files: fstest.MapFS{
+				"testdir/file1.log.json": &fstest.MapFile{Mode: fs.ModePerm},
+				"testdir/file2.txt":      &fstest.MapFile{Mode: fs.ModePerm},
+			},
+			want: []struct{ name, path string }{
+				{name: "file1.log.json", path: "testdir/file1.log.json"},
+			},
+			wantErr: false,
 		},
 	}
 
-	for _, tc := range testCases {
-		t.Run(tc.name, func(t *testing.T) {
-			// Create a temporary directory
-			tempDir, err := ioutil.TempDir("", "testlogs")
-			if err != nil {
-				t.Fatal(err)
-			}
-			defer os.RemoveAll(tempDir)
-
-			// Create test log files
-			for _, fileName := range tc.logFiles {
-				filePath := filepath.Join(tempDir, fileName)
-				if err := ioutil.WriteFile(filePath, []byte("test content"), 0644); err != nil {
-					t.Fatal(err)
+	for _, tt := range tests {
+		t.Run(tt.name, func(t *testing.T) {
+			// Create a temporary directory for the test
+			tmpDir := t.TempDir()
+			for path, file := range tt.files {
+				fullPath := filepath.Join(tmpDir, path)
+				if err := os.MkdirAll(filepath.Dir(fullPath), os.ModePerm); err != nil {
+					t.Fatalf("Failed to create directory: %v", err)
+				}
+				if err := os.WriteFile(fullPath, []byte{}, file.Mode); err != nil {
+					t.Fatalf("Failed to create file: %v", err)
 				}
 			}
 
-			// Call getLogs function
-			logs := getLogs(tempDir)
-
-			// Verify the returned logs
-			for _, log := range logs {
-				if _, ok := tc.expected[log.name]; ok {
-					tc.expected[log.name] = true
-				} else {
-					t.Errorf("Unexpected log file: %s", log.name)
-				}
+			got := getLogFiles(tmpDir)
+			var gotFiles []struct{ name, path string }
+			for _, file := range got {
+				path := strings.TrimPrefix(file.path, tmpDir+"/")
+				gotFiles = append(gotFiles, struct{ name, path string }{name: file.name, path: path})
 			}
-
-			for fileName, found := range tc.expected {
-				if !found {
-					t.Errorf("Expected log file not found: %s", fileName)
-				}
+			if !reflect.DeepEqual(gotFiles, tt.want) {
+				t.Errorf("getLogFiles() = %v, want %v", gotFiles, tt.want)
 			}
 		})
 	}
