@@ -98,6 +98,9 @@ func getBranchLogs(commits []commit, branches, queueKeys []string) branchesLog {
 
 func searchTasksRe(ss []string) *regexp.Regexp {
 	str := `(?im)`
+	if len(ss) == 0 {
+		return regexp.MustCompile(str + `((^[a-z]+)|(\s[a-z]+))-\d+`)
+	}
 	groups := []string{}
 	for _, key := range ss {
 		groups = append(groups, `(?P<`+key+`>`+strings.ToLower(key)+`-\d+)`)
