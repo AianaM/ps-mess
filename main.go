@@ -13,6 +13,7 @@ import (
 var (
 	outputDir  = "ps-mess"
 	confFile   = "config.json"
+	cmdFile    = "ps-mess.sh"
 	gitLogFile = "log.json"
 	tableFile  = "table.csv"
 )
@@ -25,7 +26,6 @@ func init() {
 	if dir, err := os.Getwd(); err != nil {
 		log.Fatal(err)
 	} else {
-		log.Println("location: ", dir)
 		outputDir = dir + "/" + outputDir
 	}
 	if logFile, err := os.Create(outputDir + "/ps-mess.log"); err != nil {
@@ -49,7 +49,7 @@ func save(path, content string) {
 	if err != nil {
 		log.Fatal(err)
 	}
-	fmt.Printf("wrote %d bytes\n", n)
+	log.Println("created", path, "(", n, "bytes )")
 	f.Sync()
 }
 
@@ -80,9 +80,11 @@ func prep() {
 	if _, err := os.Stat(confPath); errors.Is(err, os.ErrNotExist) {
 		save(confPath, makeFakeConfig())
 	}
+	cmdPath := outputDir + "/" + cmdFile
+	fmt.Println("Создаю исполняемый файл", cmdPath)
 	conf := getSettings(confPath)
 	commands := getLogCommands(conf.Branches, conf.Since, outputDir, gitLogFile)
-	fmt.Println("===\n\n", "Эту команду надо ввести в той дирректории где у тебя репа:", "\n", commands, "\n\n===")
+	save(cmdPath, commands)
 	log.Println("prep done")
 }
 

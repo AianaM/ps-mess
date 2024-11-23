@@ -41,7 +41,7 @@ func getLogCommands(branches []string, since, outputDir, logFile string) string 
 	logs := make([]string, len(branches))
 	for i, v := range branches {
 		originBranch := "origin/" + v
-		gitCmd := []string{"echo", "[", "$(", "git", "log", originBranch, pretty(), "--since=\"" + since + "\"", deleteLastComma, quoteEscape, quoteAdd, ")", "]", ">", outputDir + "/" + v + "." + logFile}
+		gitCmd := []string{"echo", "\"[\"", "$(", "git", "log", originBranch, pretty(), "--since=\"" + since + "\"", deleteLastComma, quoteEscape, quoteAdd, ")", "\"]\"", ">", outputDir + "/" + v + "." + logFile}
 		logs[i] = strings.Join(gitCmd, " ")
 	}
 	return strings.Join(logs, " && ")
